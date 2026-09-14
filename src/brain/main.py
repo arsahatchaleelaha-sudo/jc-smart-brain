@@ -13,6 +13,7 @@ from .config import settings
 from .models import ThinkRequest, ThinkResponse, SourceDoc, ComplianceResult
 from .pipeline import think
 from .layers.guard import guard as guard_fn
+from .integrations.line_birthday import send_birthday_wish
 
 logger = logging.getLogger("brain")
 
@@ -66,6 +67,59 @@ def _register_routes(app: FastAPI) -> None:
             )
         resp.latency_ms = int((time.perf_counter() - t0) * 1000)
         return resp
+
+    @app.post("/brain/birthday")
+    async def birthday_endpoint(req: dict[str, Any]) -> dict[str, Any]:
+        """ส่งอวยพรวันเกิดไปหา LINE user.
+
+        Body: {"user_id": "LINE_MID", "wish_type": "general|partner|customer|short|long|funny|formal|line", "custom_text": "optional"}
+        """
+        import json
+        from pathlib import Path
+
+        user_id = req.get("user_id")
+        wish_type = req.get("wish_type", "general")
+        custom_text = req.get("custom_text", "")
+
+        # Load birthday wishes
+        faq_path = settings().kb_faq_path
+        with open(faq_path, "r", encoding="utf-8") as f:
+            faq = json.loads(f.read())
+
+        birthdays = faq.get("birthdays", {})
+
+        # Map wish_type to trigger key
+        type_map = {
+            "general": "อวยพรวันเกิด",
+            "partner": "อวยพรวันเกิด พาร์ทเนอร์",
+            "team": "อวยพรวันเกิด ลูกทีม",
+            "customer": "อวยพรวันเกิด ลูกค้า",
+            "leader": "อวยพรวันเกิด ผู้นำ",
+            "short": "อวยพรวันเกิด สั้นๆ",
+            "long": "อวยพรวันเกิด ยาวๆ",
+            "funny": "อวยพรวันเกิด ตลกๆ",
+            "formal": "อวยพรวันเกิด ทางการ",
+            "line": "อวยพรวันเกิด กลุ่ม LINE",
+        }
+
+        trigger = type_map.get(wish_type, "อวยพรวันเกิด")
+        entry = birthdays.get(trigger, birthdays.get("อวยพรวันเกิด", {}))
+        wish_text = custom_text if custom_text else entry.get("answer", "🎂 สุขสันต์วันเกิดนะครับ!")
+
+        # Send via LINE
+        result = send_birthday_wish(
+            user_id=user_id,
+            wish_text=wish_text,
+        )
+
+        return {
+            "status": "ok" if result.get("pushed") else "error",
+            "wish_type": wish_type,
+            "wish_text": wish_text[:100],
+            "user_id": user_id or "default",
+            "pushed": result.get("pushed"),
+            "detail": result.get("detail", ""),
+        }
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request, exc: Exception):
