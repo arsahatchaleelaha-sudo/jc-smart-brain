@@ -97,6 +97,10 @@ def _classify_intent(q: str, q_lower: str) -> str:
     if any(w in q_lower for w in ["ติดต่อ", "contact", "เจ้าหน้าที่", "support", "ช่วย", "help"]):
         return "support_handoff"
 
+    # อวยพรวันเกิด
+    if any(w in q_lower for w in ["วันเกิด", "อวยพร", "happy birthday", "birthday"]):
+        return "birthday_wish"
+
     # คณิตศาสตร์พื้นฐาน
     if _looks_like_math(q_lower):
         return "math_simple"
