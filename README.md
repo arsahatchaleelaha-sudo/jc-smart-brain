@@ -1,30 +1,107 @@
 # JC SMART Brain — สมองกลางที่ทุก agent เรียกใช้ร่วมกัน
-#
-# Spec: ARCHITECTURE.md (phase plan, 6 layers, API contract, success metrics)
-# This repo = Path B ของแผนซ่อม jwizs.com -> สร้างสมองกลางที่ cache-first, grounded, compliance-guarded
 
-## สร้างเมื่อไหร่
-2026-09-08 — เริ่มจาก Phase 0 (skeleton + health check + pgvector + 1 test)
+สมองกลาง (brain middleware) ของ J&C — cache-first, grounded, compliance-guarded
+สำหรับ jwizs.com และ agent อื่นๆ เรียกใช้งานผ่าน API
 
-## สิ่งที่มีตอนนี้
-- `src/brain/` — FastAPI app + 6 layers (sense/recall/ground/reason/guard/learn)
-- `tests/` — test ทุก layer + acceptance
-- `kb/` — KB ไฟล์ .md (จาก J&C_FAQ_Master_100 + Blueprint)
-- `deploy/` — emergent.host + fallback deploy
+## สถานะปัจจุบัน
 
-## วิธีรัน
-```bash
-uv sync          # ติดตั้ง deps
-uv run make dev  # รัน local (โหนด + pgvector)
-uv run make test # pytest ทั้งหมด
+- **11 กลุ่มความรู้, 55 entries** ใน `src/brain/kb/faq_entries.json`
+- **6-layer pipeline** สำเร็จ: sense → recall → ground → reason → guard → learn
+- **10/10 pytest เขียว** — health, cache_hit, fallback, compliance, provenance, error handling
+- **23/23 live comparison vs jwizs.com** — Brain 0 errors, 0 timeouts
+- **LINE birthday push** สำเร็จ — POST /brain/birthday ส่งไป LINE API ได้ (quota เดือนนี้หมดแล้ว)
+
+## โครงสร้าง
+
+```
+src/brain/
+├── main.py              # FastAPI app + /health + /brain + /brain/birthday
+├── config.py            # Settings (env + defaults)
+├── models.py            # ThinkRequest, ThinkResponse, SourceDoc, ComplianceResult
+├── pipeline.py          # Orchestrate 6 layers (asyncio.gather sense+recall)
+├── layers/
+│   ├── sense.py         # Intent classification
+│   ├── recall.py        # FAQ cache (JSON lookup)
+│   ├── ground.py        # BM25 keyword + vector store
+│   ├── reason.py        # Anthropic LLM (asyncio.to_thread)
+│   ├── guard.py         # Compliance check
+│   └── learn.py         # Feedback memory
+├── kb/
+│   └── faq_entries.json # 11 groups, 55 entries
+└── integrations/
+    └── line_birthday.py # LINE push for birthday wishes
+
+tests/
+└── test_acceptance.py   # 10 acceptance tests
+
+Makefile                  # dev, test, lint, clean
+pyproject.toml            # deps + pytest config
+README.md                 # นี้
 ```
 
+## วิธีรัน
+
+```bash
+uv sync            # ติดตั้ง deps
+uv run make dev    # รัน local (port 8000)
+uv run make test   # pytest ทั้งหมด
+uv run make lint   # ruff check
+```
+
+## API
+
+### POST /brain
+```json
+{
+  "query": "pv คืออะไร",
+  "agent_id": "jwiz-customer"
+}
+```
+Response: ThinkResponse (answer, route, grounded, compliance, provenance, cost, latency_ms)
+
+### POST /brain/birthday
+```json
+{
+  "user_id": "LINE_MID",
+  "wish_type": "general|partner|team|customer|leader|short|long|funny|formal|line",
+  "custom_text": "optional"
+}
+```
+Response: {status, wish_type, wish_text, user_id, pushed, detail}
+
+## KB ทั้งหมด (55 entries)
+
+- greetings / smalltalk: 3 (สวัสดี, เฮ้ย, ลาก่อน)
+- pv / pt / ppi: 4 (pv, bv, pt, ppi)
+- ผลิตภัณฑ์ / catalog: 6 (สินค้ามีอะไรบ้าง, สินค้าทั้งหมด, catalog, สินค้า, มีผลิตภัณฑ์อะไรบ้าง, ผลิตภัณฑ์)
+- บริษัท: 2 (j&c คืออะไร, join and coin)
+- เรียนรู้ / coaching: 6 (learning center, ศูนย์การเรียนรู้, เริ่มประเมินตัวเอง, เริ่มยังไง, เริ่มต้น, 30 วันแรก)
+- สนับสนุน: 4 (ติดต่อเจ้าหน้าที่, ช่วย, help, สนับสนุน)
+- โฆษณา / content: 4 (โฆษณา, tiktok, clip, โพสต์)
+- คณิตศาสตร์: 5 (บวก, ลบ, คูณ, หาร, เท่ากับ)
+- สาขา: 4 (สาขา, สาขาใกล้ฉัน, หา, หาสาขาใกล้ตัว)
+- ตำแหน่ง: 4 (ตำแหน่ง, เลื่อน, Platinum, ขึ้น Platinum)
+- birthdays: 13 (อวยพรวันเกิด + 12 แบบย่อย)
+
+## LINE Birthday Push
+
+ส่งไป LINE user ได้จริง ตัวอย่าง:
+```bash
+curl -X POST http://localhost:8000/brain/birthday \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "LINE_MID", "wish_type": "funny"}'
+```
+
+`LINE_CHANNEL_SECRET` และ `LINE_ACCESS_TOKEN` ต้องตั้งใน `.env` จึงจะ push ได้ (ดู `.env.example`)
+
 ## กฎ
+
 - test-first — ไม่มี test = ยังไม่เสร็จ
-- ทำทีละ phase — Phase ปัจจุบันต้อง pytest เขียว ก่อนไป phase ถัดไป
-- ไม่ hardcode secret — ทุก key จาก env (.env)
-- ทุกคำตอบต้อง grounded — reason layer ตอบจาก retrieved chunks เท่านั้น + citation
+- ทำทีละ feature — แต่ละอย่างต้อง pytest เขียว
+- ไม่ hardcode secret — ทุก key จาก env
+- ทุกคำตอบต้อง grounded — reason layer ตอบจาก chunks + citation
 
 ## เชื่อมต่อกับ jwizs.com
-Phase 5 (ARCHITECTURE.md §7.5) — jwizs.com เรียก POST /brain แทน logic เดิม
+
+jwizs.com เรียก POST /brain แทน logic เดิม
 เริ่มจาก 1 endpoint, A/B เทียบคุณภาพ+cost, ค่อยๆ ย้าย

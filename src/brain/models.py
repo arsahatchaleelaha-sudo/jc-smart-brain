@@ -48,9 +48,10 @@ class ThinkRequest(BaseModel):
 class SourceDoc(BaseModel):
     """เอกสารแหล่งที่มาอย่างหนึ่ง."""
 
-    doc: str
+    doc: str = ""
     chunk_id: str | None = None
     title: str | None = None
+    url: str | None = None
     page: int | None = None
 
 

@@ -67,15 +67,9 @@ def send_birthday_wish(
         logger.warning("LINE push_text failed: %s", e)
         results.append({"type": "text", "status": 0, "detail": str(e)})
 
-    # 2. Push audio (ถ้ามี)
+    # 2. Push audio (ถ้ามี) — reserved for future TTS integration
     if audio_path and Path(audio_path).exists():
-        try:
-            # LINE รองรับ m4a — แปลง mp3 → m4a ถ้าจำเป็น
-            # สำหรับตอนนี้ push เป็น text ไปก่อน — audio push ต้องการ LINE Audio API
-            # TODO: เชื่อมกับ /api/jarvis/speak ของ jwizs.com
-            logger.info("Audio push pending — would send: %s", audio_path)
-        except Exception as e:
-            logger.warning("Audio push failed: %s", e)
+        logger.info("Audio push pending — would send: %s", audio_path)
 
     pushed = any(r.get("status") == 200 for r in results)
     return {

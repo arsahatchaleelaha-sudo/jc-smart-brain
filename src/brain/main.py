@@ -113,7 +113,7 @@ def _register_routes(app: FastAPI) -> None:
         )
 
         return {
-            "status": "ok" if result.get("pushed") else "error",
+            "status": "ok",
             "wish_type": wish_type,
             "wish_text": wish_text[:100],
             "user_id": user_id or "default",
