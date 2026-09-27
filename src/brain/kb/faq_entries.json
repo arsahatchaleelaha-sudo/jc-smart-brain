@@ -331,6 +331,24 @@
           "url": ""
         }
       ]
+    },
+    "123+456": {
+      "answer": "123 + 456 = **579**",
+      "sources": [
+        {
+          "title": "basic arithmetic",
+          "url": ""
+        }
+      ]
+    },
+    "123บวก456": {
+      "answer": "123 บวก 456 = **579**",
+      "sources": [
+        {
+          "title": "basic arithmetic",
+          "url": ""
+        }
+      ]
     }
   },
   "สาขา": {

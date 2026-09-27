@@ -121,6 +121,159 @@ def _register_routes(app: FastAPI) -> None:
             "detail": result.get("detail", ""),
         }
 
+    @app.post("/brain/generate")
+    async def generate_endpoint(req: dict[str, Any]) -> dict[str, Any]:
+        """Generate image/video via Google Flow (useapi.net proxy).
+
+        Body:
+            {
+                "type": "image|video|ugc",
+                "prompt": "description",
+                "model": "nano-banana-2-lite|veo-3.1-lite|omni-flash|...",
+                "aspect_ratio": "16:9|9:16|landscape|portrait|1:1|...",
+                "duration": 8,
+                "count": 1,
+                "output_dir": "/tmp/flow_out",
+                "filename": "asset.jpg|asset.mp4",
+                "scenes": [{"prompt": "...", "name": "scene1"}, ...],  # for type=ugc
+                "async_mode": false,
+                "email": "...",
+            }
+
+        Returns:
+            For image/video:  {"status": "ok"|"error", "url": "...", "local_path": "...", "credits_remaining": int}
+            For ugc:          {"status": "ok"|"error", "clips": [...], "errors": [...], "n_scenes": int, "n_success": int}
+            When disabled:    {"status": "error", "detail": "USEAPI_TOKEN not set"}
+        """
+        import asyncio
+
+        from brain.integrations.google_flow import (
+            generate_image_sync,
+            generate_video_sync,
+            generate_and_download_image,
+            generate_and_download_video,
+            ugc_pipeline,
+            is_available,
+            extract_image_urls,
+            extract_video_urls,
+            _AVAILABLE,
+            DEFAULT_IMAGE_MODEL,
+            DEFAULT_VIDEO_MODEL,
+        )
+
+        # ── validation first (works even without token) ──────────────────────────
+        gen_type = req.get("type", "image")
+        prompt = req.get("prompt", "")
+
+        # prompt required for image/video; ugc uses scenes instead
+        if gen_type in ("image", "video") and not prompt:
+            return {"status": "error", "detail": "prompt is required"}
+
+        if gen_type not in ("image", "video", "ugc"):
+            return {"status": "error", "detail": f"unknown type: {gen_type!r}"}
+
+        if gen_type == "ugc":
+            # "scenes" key must be present and be a list
+            if "scenes" not in req:
+                return {"status": "error", "detail": "scenes array required for type=ugc"}
+            scenes_raw = req["scenes"]
+            if scenes_raw is None or not isinstance(scenes_raw, list):
+                return {"status": "error", "detail": "scenes array required for type=ugc"}
+            scenes = [{"prompt": s.get("prompt", ""), "name": s.get("name", "")} for s in scenes_raw]
+            scenes = [s for s in scenes if s["prompt"]]
+            if not scenes:
+                return {"status": "error", "detail": "no valid scenes with prompt"}
+        else:
+            scenes = []
+
+        # ── token check (after validation) ───────────────────────────────────────
+        # For ugc, we still run ugc_pipeline to get shape keys (clips/errors/n_scenes/n_success)
+        # even without a token — the pipeline will fail gracefully per-scene.
+
+        model = req.get("model") or None
+        aspect_ratio = req.get("aspect_ratio") or None
+        duration = req.get("duration", 8)
+        count = req.get("count", 1)
+        out_dir = req.get("output_dir", "/tmp/google_flow_out")
+        filename = req.get("filename") or None
+        async_mode = req.get("async_mode", False)
+        email = req.get("email") or None
+
+        if gen_type == "image":
+            if not _AVAILABLE:
+                return {"status": "error", "detail": "Google Flow integration disabled — USEAPI_TOKEN not set"}
+            result = generate_and_download_image(
+                prompt=prompt,
+                out_dir=out_dir,
+                filename=filename or "image.jpg",
+                model=model or DEFAULT_IMAGE_MODEL,
+                aspect_ratio=aspect_ratio or "16:9",
+            )
+            if "error" in result:
+                return {"status": "error", "detail": result["error"], "raw": result}
+            urls = extract_image_urls(result)
+            return {
+                "status": "ok",
+                "type": "image",
+                "url": urls[0] if urls else None,
+                "local_path": result.get("local_path"),
+                "credits_remaining": result.get("remainingCredits"),
+                "media": result.get("media"),
+            }
+
+        elif gen_type == "video":
+            result = generate_and_download_video(
+                prompt=prompt,
+                out_dir=out_dir,
+                filename=filename or "video.mp4",
+                model=model or DEFAULT_VIDEO_MODEL,
+                aspect_ratio=aspect_ratio or "landscape",
+                duration=duration,
+                start_image=req.get("start_image"),
+                end_image=req.get("end_image"),
+            )
+            if "error" in result:
+                return {"status": "error", "detail": result["error"], "raw": result}
+            urls = extract_video_urls(result)
+            thumb_urls = []
+            for item in result.get("media", []):
+                if item.get("thumbnailUrl"):
+                    thumb_urls.append(item["thumbnailUrl"])
+            return {
+                "status": "ok",
+                "type": "video",
+                "url": urls[0] if urls else None,
+                "thumbnail_url": thumb_urls[0] if thumb_urls else None,
+                "local_path": result.get("local_path"),
+                "credits_remaining": result.get("remainingCredits"),
+                "media": result.get("media"),
+            }
+
+        else:  # ugc
+            result = ugc_pipeline(
+                scenes=scenes,
+                out_dir=out_dir,
+                image_model=model or DEFAULT_IMAGE_MODEL,
+                video_model=req.get("video_model") or model or DEFAULT_VIDEO_MODEL,
+                aspect_ratio=aspect_ratio or "9:16",
+                video_duration=duration,
+            )
+            base = {
+                "clips": result["clips"],
+                "errors": result["errors"],
+                "n_scenes": result["n_scenes"],
+                "n_success": result["n_success"],
+                "credits_remaining": result.get("credits_remaining"),
+            }
+            if result["errors"] and not result["clips"]:
+                return {"status": "error", "detail": "all scenes failed", **base}
+            return {
+                "status": "ok" if not result["errors"] else "partial",
+                **base,
+            }
+
+        # unreachable — gen_type is validated above as image|video|ugc
+
     @app.exception_handler(Exception)
     async def global_exception_handler(request, exc: Exception):
         logger.exception("unhandled: %s", exc)
