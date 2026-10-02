@@ -6,14 +6,19 @@ BM25 data is in-memory (process-local). Auto-ingest FAQ entries on first use.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
-from pathlib import Path
 from typing import Any
 
-from chromadb import PersistentClient
-from chromadb.config import Settings
+try:
+    from chromadb import PersistentClient
+    from chromadb.config import Settings
+except ImportError:
+    PersistentClient = None
+    Settings = None
 
-from ..config import settings
+from ..config import settings, kb_faq_path
+from ..models import ThinkRequest
 
 logger = logging.getLogger("brain.ground")
 
@@ -28,6 +33,8 @@ class VectorStore:
         self.client = self._connect()
 
     def _connect(self):
+        if PersistentClient is None:
+            return None
         try:
             return PersistentClient(path=self.path, settings=Settings(allow_reset=True))
         except Exception as e:
@@ -75,9 +82,12 @@ class VectorStore:
             return []
 
         try:
+            count = coll.count()
+            if count == 0:
+                return []
             result = coll.query(
                 query_texts=[query_text],
-                n_results=n_results,
+                n_results=min(n_results, count),
                 where=where,
             )
             docs: list[dict[str, Any]] = []
@@ -129,6 +139,7 @@ class BM25Retriever:
         self.tokenized: list[list[str]] = []
 
     def add(self, text: str) -> None:
+        self.bm25 = None
         self.documents.append(text)
         toks = _tokenize(text)
         self.tokenized.append(toks)
@@ -228,16 +239,7 @@ def _ingest_faq_into_bm25() -> int:
         return len(bm25.documents)  # already ingested
 
     try:
-        faq_path = settings().kb_faq_path
-        if not Path(faq_path).exists():
-            # fallback: ลองค้นจากตำแหน่งสัมพัทธ์
-            fallback = Path(__file__).resolve().parent.parent.parent / "src" / "brain" / "kb" / "faq_entries.json"
-            if fallback.exists():
-                faq_path = str(fallback)
-
-        if not Path(faq_path).exists():
-            logger.warning("faq json not found for BM25 ingest: %s", faq_path)
-            return 0
+        faq_path = kb_faq_path()
 
         with open(faq_path, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -327,7 +329,7 @@ def ingest_texts(texts: list[str], docs: list[str] | None = None) -> int:
         docs_to_add = []
         for i, t in enumerate(texts):
             docs_to_add.append({
-                "id": f"kb-{i:06d}",
+                "id": hashlib.sha256(t.encode()).hexdigest(),
                 "text": t,
                 "metadata": {"doc": docs[i] if i < len(docs) else "jc-smart kb"},
             })

@@ -6,13 +6,12 @@ import logging
 import time
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-from .config import settings
-from .models import ThinkRequest, ThinkResponse, SourceDoc, ComplianceResult
+from .config import settings, kb_faq_path
+from .models import ThinkRequest, ThinkResponse, BirthdayRequest, ComplianceResult
 from .pipeline import think
-from .layers.guard import guard as guard_fn
 from .integrations.line_birthday import send_birthday_wish
 
 logger = logging.getLogger("brain")
@@ -69,20 +68,19 @@ def _register_routes(app: FastAPI) -> None:
         return resp
 
     @app.post("/brain/birthday")
-    async def birthday_endpoint(req: dict[str, Any]) -> dict[str, Any]:
+    def birthday_endpoint(req: BirthdayRequest) -> dict[str, Any]:
         """ส่งอวยพรวันเกิดไปหา LINE user.
 
         Body: {"user_id": "LINE_MID", "wish_type": "general|partner|customer|short|long|funny|formal|line", "custom_text": "optional"}
         """
         import json
-        from pathlib import Path
 
-        user_id = req.get("user_id")
-        wish_type = req.get("wish_type", "general")
-        custom_text = req.get("custom_text", "")
+        user_id = req.user_id
+        wish_type = req.wish_type
+        custom_text = req.custom_text
 
         # Load birthday wishes
-        faq_path = settings().kb_faq_path
+        faq_path = kb_faq_path()
         with open(faq_path, "r", encoding="utf-8") as f:
             faq = json.loads(f.read())
 
@@ -122,7 +120,7 @@ def _register_routes(app: FastAPI) -> None:
         }
 
     @app.post("/brain/generate")
-    async def generate_endpoint(req: dict[str, Any]) -> dict[str, Any]:
+    def generate_endpoint(req: dict[str, Any]) -> dict[str, Any]:
         """Generate image/video via Google Flow (useapi.net proxy).
 
         Body:
@@ -133,7 +131,7 @@ def _register_routes(app: FastAPI) -> None:
                 "aspect_ratio": "16:9|9:16|landscape|portrait|1:1|...",
                 "duration": 8,
                 "count": 1,
-                "output_dir": "/tmp/flow_out",
+                "output_dir": "/tmp/google_flow_out",
                 "filename": "asset.jpg|asset.mp4",
                 "scenes": [{"prompt": "...", "name": "scene1"}, ...],  # for type=ugc
                 "async_mode": false,
@@ -145,15 +143,11 @@ def _register_routes(app: FastAPI) -> None:
             For ugc:          {"status": "ok"|"error", "clips": [...], "errors": [...], "n_scenes": int, "n_success": int}
             When disabled:    {"status": "error", "detail": "USEAPI_TOKEN not set"}
         """
-        import asyncio
-
         from brain.integrations.google_flow import (
-            generate_image_sync,
             generate_video_sync,
             generate_and_download_image,
             generate_and_download_video,
             ugc_pipeline,
-            is_available,
             extract_image_urls,
             extract_video_urls,
             _AVAILABLE,
@@ -166,7 +160,7 @@ def _register_routes(app: FastAPI) -> None:
         prompt = req.get("prompt", "")
 
         # prompt required for image/video; ugc uses scenes instead
-        if gen_type in ("image", "video") and not prompt:
+        if gen_type in ("image", "video") and (not isinstance(prompt, str) or not prompt.strip()):
             return {"status": "error", "detail": "prompt is required"}
 
         if gen_type not in ("image", "video", "ugc"):
@@ -179,8 +173,8 @@ def _register_routes(app: FastAPI) -> None:
             scenes_raw = req["scenes"]
             if scenes_raw is None or not isinstance(scenes_raw, list):
                 return {"status": "error", "detail": "scenes array required for type=ugc"}
-            scenes = [{"prompt": s.get("prompt", ""), "name": s.get("name", "")} for s in scenes_raw]
-            scenes = [s for s in scenes if s["prompt"]]
+            scenes = [{"prompt": s.get("prompt", ""), "name": s.get("name", "")} for s in scenes_raw if isinstance(s, dict)]
+            scenes = [s for s in scenes if isinstance(s["prompt"], str) and s["prompt"].strip() and isinstance(s["name"], str)]
             if not scenes:
                 return {"status": "error", "detail": "no valid scenes with prompt"}
         else:
@@ -199,6 +193,42 @@ def _register_routes(app: FastAPI) -> None:
         async_mode = req.get("async_mode", False)
         email = req.get("email") or None
 
+        # Reject malformed optional fields before calling synchronous integrations.
+        for key in ("model", "video_model", "aspect_ratio", "email", "filename", "output_dir", "start_image", "end_image"):
+            if req.get(key) is not None and not isinstance(req[key], str):
+                return {"status": "error", "detail": f"{key} must be a string"}
+        if type(count) is not int or not 1 <= count <= 4:
+            return {"status": "error", "detail": "count must be an integer from 1 to 4"}
+        if type(duration) is not int or duration <= 0:
+            return {"status": "error", "detail": "duration must be a positive integer"}
+        if type(async_mode) is not bool:
+            return {"status": "error", "detail": "async_mode must be a boolean"}
+        if async_mode and gen_type != "video":
+            return {"status": "error", "detail": "async_mode is supported only for video"}
+
+        # Downloads from this public endpoint stay within its configured media root.
+        import os
+        from pathlib import Path
+        media_root = Path(os.environ.get("FLOW_OUTPUT_DIR", "/tmp/google_flow_out")).resolve()
+        requested_dir = Path(req.get("output_dir") or str(media_root))
+        output_path = (requested_dir if requested_dir.is_absolute() else media_root / requested_dir).resolve()
+        if not output_path.is_relative_to(media_root):
+            return {"status": "error", "detail": "output_dir must be within FLOW_OUTPUT_DIR"}
+        if filename and (Path(filename).name != filename or filename in (".", "..")):
+            return {"status": "error", "detail": "filename must be a plain file name"}
+        out_dir = str(output_path)
+
+        if async_mode:
+            result = generate_video_sync(
+                prompt=prompt, model=model or DEFAULT_VIDEO_MODEL,
+                aspect_ratio=aspect_ratio or "landscape", duration=duration,
+                count=count, email=email, async_mode=True,
+                start_image=req.get("start_image"), end_image=req.get("end_image"),
+            )
+            if "error" in result:
+                return {"status": "error", "detail": result["error"]}
+            return {**result, "status": "ok", "job_status": result.get("status"), "type": "video"}
+
         if gen_type == "image":
             if not _AVAILABLE:
                 return {"status": "error", "detail": "Google Flow integration disabled — USEAPI_TOKEN not set"}
@@ -208,6 +238,7 @@ def _register_routes(app: FastAPI) -> None:
                 filename=filename or "image.jpg",
                 model=model or DEFAULT_IMAGE_MODEL,
                 aspect_ratio=aspect_ratio or "16:9",
+                count=count, email=email,
             )
             if "error" in result:
                 return {"status": "error", "detail": result["error"], "raw": result}
@@ -216,6 +247,7 @@ def _register_routes(app: FastAPI) -> None:
                 "status": "ok",
                 "type": "image",
                 "url": urls[0] if urls else None,
+                "urls": urls,
                 "local_path": result.get("local_path"),
                 "credits_remaining": result.get("remainingCredits"),
                 "media": result.get("media"),
@@ -231,6 +263,7 @@ def _register_routes(app: FastAPI) -> None:
                 duration=duration,
                 start_image=req.get("start_image"),
                 end_image=req.get("end_image"),
+                count=count, email=email,
             )
             if "error" in result:
                 return {"status": "error", "detail": result["error"], "raw": result}
@@ -243,6 +276,7 @@ def _register_routes(app: FastAPI) -> None:
                 "status": "ok",
                 "type": "video",
                 "url": urls[0] if urls else None,
+                "urls": urls,
                 "thumbnail_url": thumb_urls[0] if thumb_urls else None,
                 "local_path": result.get("local_path"),
                 "credits_remaining": result.get("remainingCredits"),
@@ -254,7 +288,7 @@ def _register_routes(app: FastAPI) -> None:
                 scenes=scenes,
                 out_dir=out_dir,
                 image_model=model or DEFAULT_IMAGE_MODEL,
-                video_model=req.get("video_model") or model or DEFAULT_VIDEO_MODEL,
+                video_model=req.get("video_model") or DEFAULT_VIDEO_MODEL,
                 aspect_ratio=aspect_ratio or "9:16",
                 video_duration=duration,
             )

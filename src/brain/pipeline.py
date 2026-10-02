@@ -67,6 +67,13 @@ async def think(req: ThinkRequest) -> ThinkResponse:
     ถ้าไม่ hit — วิ่ง GROUND → REASON → GUARD → LEARN.
     """
 
+    arithmetic = _calculate(req.query)
+    if arithmetic is not None:
+        return ThinkResponse(
+            answer=arithmetic, compliance=ComplianceResult(passed=True),
+            grounded=False, route="calculator", provenance={"model": "calculator"},
+        )
+
     # ── SENSE + RECALL: ทำแบบขนานกัน (ทั้งคู่ read-only จาก req) ──────────────
     sense_result: dict[str, Any] = {}
     cache_result: dict[str, Any] | None = None
@@ -89,17 +96,18 @@ async def think(req: ThinkRequest) -> ThinkResponse:
             logger.warning("sense layer error: %s", s)
         if isinstance(r, dict):
             cache_result = r
-        else:
+        elif isinstance(r, Exception):
             logger.warning("recall layer error: %s", r)
 
     # ── ถ้า cache hit — จบเลย ───────────────────────────────────────────────────
     if cache_result and cache_result.get("hit"):
         cr = cache_result
         logger.info("recall: cache hit — returning fast (%s)", cr.get("route", "?"))
+        checked = await guard(req, cr["answer"], [{"source": source} for source in cr.get("sources", [])]) if guard else {"passed": True, "flags": []}
         return ThinkResponse(
-            answer=cr["answer"],
+            answer=cr["answer"] if checked["passed"] else "ขออภัยครับ คำถามนี้ผมไม่สามารถตอบได้เนื่องจากเหตุผลด้านนโยบายครับ",
             sources=cr.get("sources", []),
-            compliance=ComplianceResult(passed=True, flags=[]),
+            compliance=ComplianceResult(passed=checked["passed"], flags=checked["flags"]),
             grounded=cr.get("grounded", False),
             route=cr.get("route", "cache_hit"),
             cost=0.0,
@@ -127,7 +135,7 @@ async def think(req: ThinkRequest) -> ThinkResponse:
         answer = reason_result.get("answer", "")
         provenance = reason_result.get("provenance", {})
         cost = reason_result.get("cost", 0.0)
-        used_reason = True
+        used_reason = provenance.get("model") not in ("chunks-only", "fallback")
         logger.info("reason: answer len=%d cost=%.4f", len(answer), cost)
     elif chunks:
         answer = _answer_from_chunks(req.query, chunks)
@@ -140,9 +148,11 @@ async def think(req: ThinkRequest) -> ThinkResponse:
 
     # ── 5. GUARD — compliance pre + post + critic ──────────────────────────────
     compliance_flags: list[str] = []
+    compliance_passed = True
     if guard is not None:
         guard_result = await guard(req, answer, chunks)
         compliance_flags = guard_result.get("flags", [])
+        compliance_passed = guard_result.get("passed", True)
         if not guard_result.get("passed", True):
             answer = "ขออภัยครับ คำถามนี้ผมไม่สามารถตอบได้เนื่องจากเหตุผลด้านนโยบายครับ"
             provenance["compliance_blocked"] = True
@@ -150,21 +160,28 @@ async def think(req: ThinkRequest) -> ThinkResponse:
     else:
         logger.debug("guard layer not ready — skipping compliance post-check")
 
-    # ── 6. LEARN — เขียน memory, อัปเดต cache, feedback ───────────────────────
-    if learn is not None:
-        await learn(req, answer, chunks, compliance_flags)
-        logger.debug("learn: done")
-
-    return ThinkResponse(
+    response = ThinkResponse(
         answer=answer,
         sources=[SourceDoc(**c["source"]) for c in chunks if "source" in c] if chunks else [],
-        compliance=ComplianceResult(passed=len(compliance_flags) == 0, flags=compliance_flags),
-        grounded=bool(chunks),
-        route=_determine_route(reason is not None, chunks, used_reason),
+        compliance=ComplianceResult(passed=compliance_passed, flags=compliance_flags),
+        grounded=bool(chunks) and provenance.get("model") != "fallback",
+        route=("fallback" if provenance.get("model") == "fallback" else
+               "chunks-only" if provenance.get("model") == "chunks-only" else
+               _determine_route(reason is not None, chunks, used_reason)),
         cost=cost,
         latency_ms=0,
         provenance=provenance,
     )
+
+    # ── 6. LEARN — เขียน memory, อัปเดต cache, feedback ───────────────────────
+    if learn is not None:
+        try:
+            await learn(req, response)
+        except Exception:
+            logger.exception("memory write failed")
+        logger.debug("learn: done")
+
+    return response
 
 
 def _answer_from_chunks(query: str, chunks: list[dict[str, Any]]) -> str:
@@ -182,3 +199,31 @@ def _answer_from_chunks(query: str, chunks: list[dict[str, Any]]) -> str:
     if len(combined) > 800:
         combined = combined[:800] + "..."
     return f"จากข้อมูลในระบบ: {combined}"
+
+
+def _calculate(query: str) -> str | None:
+    """Evaluate exactly two decimal operands without evaluating Python code."""
+    import re
+    from decimal import Decimal, localcontext
+    match = re.fullmatch(
+        r"\s*([+-]?\d+(?:\.\d+)?)\s*(บวก|ลบ|คูณ|หาร|[+*/×÷-])\s*"
+        r"([+-]?\d+(?:\.\d+)?)\s*(?:เท่ากับ(?:เท่าไหร่|เท่าไร)?|=\s*\??)?\s*",
+        query,
+    )
+    if not match:
+        return None
+    left, operator, right = match.groups()
+    with localcontext() as ctx:
+        ctx.prec = max(28, len(left) + len(right) + 10)
+        a, b = Decimal(left), Decimal(right)
+        if operator in ("/", "÷", "หาร") and b == 0:
+            return "ไม่สามารถหารด้วยศูนย์ได้ครับ"
+        if operator in ("+", "บวก"):
+            result = a + b
+        elif operator in ("-", "ลบ"):
+            result = a - b
+        elif operator in ("*", "×", "คูณ"):
+            result = a * b
+        else:
+            result = a / b
+    return f"{left} {operator} {right} = **{result:f}**"

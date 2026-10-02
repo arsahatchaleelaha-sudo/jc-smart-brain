@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ─── Request ────────────────────────────────────────────────────────────────────
@@ -42,6 +42,27 @@ class ThinkRequest(BaseModel):
     )
 
 
+    @field_validator("query")
+    @classmethod
+    def nonblank_query(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("query must not be blank")
+        return value.strip()
+
+
+class BirthdayRequest(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    wish_type: str = "general"
+    custom_text: str = Field(default="", max_length=5000)
+
+    @field_validator("user_id")
+    @classmethod
+    def nonblank_user(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("user_id must not be blank")
+        return value.strip()
+
+
 # ─── Response ───────────────────────────────────────────────────────────────────
 
 
@@ -72,7 +93,7 @@ class ThinkResponse(BaseModel):
     grounded: bool
     route: str = Field(
         ...,
-        description="cache_hit | rag | llm | fallback",
+        description="cache_hit | calculator | chunks-only | llm_reason | fallback",
     )
     cost: float = Field(default=0.0, ge=0.0)
     latency_ms: int = Field(default=0, ge=0)

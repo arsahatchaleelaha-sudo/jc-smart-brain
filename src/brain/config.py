@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from pathlib import Path
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+logger = logging.getLogger("brain.config")
 
 
 class BrainSettings(BaseSettings):
@@ -30,6 +35,9 @@ class BrainSettings(BaseSettings):
 
     # KB (FAQ entries JSON)
     kb_faq_path: str = "./src/brain/kb/faq_entries.json"
+
+    useapi_token: str = ""
+    useapi_email: str = ""
 
     # server
     brain_env: str = "dev"
@@ -73,7 +81,7 @@ def kb_faq_path() -> Path:
     if not p.exists():
         logger.warning("kb_faq_path not found: %s (will use default)", p)
         # fallback: ลอง path แบบ relative จาก project root
-        fallback = Path(__file__).resolve().parent.parent.parent / "src" / "brain" / "kb" / "faq_entries.json"
+        fallback = Path(__file__).resolve().parent / "kb" / "faq_entries.json"
         if fallback.exists():
             return fallback
         return p

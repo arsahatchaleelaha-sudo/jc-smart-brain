@@ -55,7 +55,7 @@ class TestModelConstants:
 
 class TestAvailability:
     def test_no_token_disabled(self):
-        assert _AVAILABLE is False  # TOKEN not set in test env
+        assert is_available() is False  # Disabled by the isolation fixture
 
     def test_is_available_matches(self):
         assert is_available() is False

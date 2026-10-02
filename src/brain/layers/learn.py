@@ -1,14 +1,15 @@
-"""Learn layer — memory write + cache update + feedback."""
+"""Learn layer — persist session responses and feedback."""
 
 from __future__ import annotations
 
 import logging
 import time
+from threading import RLock
+from uuid import uuid4
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..config import settings, cache_file
 from ..models import ThinkRequest, ThinkResponse
 
 logger = logging.getLogger("brain.learn")
@@ -16,6 +17,8 @@ logger = logging.getLogger("brain.learn")
 
 # ─── Memory store (ก่อนจะทำ Postgres จริง — ใช้ JSON ไฟล์) ───────────────────
 
+
+_memory_lock = RLock()
 
 MEMORY_PATH = Path("./data/brain_memory.json")
 
@@ -33,6 +36,7 @@ def _load_memory() -> dict[str, Any]:
 
 
 def _save_memory(data: dict[str, Any]) -> None:
+    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = MEMORY_PATH.with_suffix(".tmp")
     tmp.write_text(
         __import__("json").dumps(data, ensure_ascii=False, indent=2),
@@ -41,7 +45,7 @@ def _save_memory(data: dict[str, Any]) -> None:
     tmp.rename(MEMORY_PATH)
 
 
-def write_memory(
+def _write_memory(
     req: ThinkRequest,
     resp: ThinkResponse,
     feedback: str | None = None,
@@ -52,7 +56,7 @@ def write_memory(
 
     session_id = req.context.get("session_id") if req.context else None
     if session_id is None:
-        session_id = f"mem-{int(time.time() * 1000)}"
+        session_id = f"mem-{uuid4().hex}"
 
     data["sessions"][session_id] = {
         "ts": datetime.utcnow().isoformat(),
@@ -81,57 +85,16 @@ def write_memory(
     logger.debug("memory: wrote session %s + feedback=%s", session_id, bool(feedback))
 
 
-def update_cache(resp: ThinkResponse) -> None:
-    """อัปเดต cache — semantic/FAQ entry สำหรับคำถามที่ตอบแล้ว."""
-
-    # จะ update semantic cache เมื่อมี LLM response และไม่ใช่ fallback
-    if resp.route in ("cache_hit", "fallback") or resp.cost == 0:
-        return  # ไม่ต้อง update cache สำหรับ cache_hit หรือ fallback ฟรี
-
-    # semantic cache — เก็บคำตอบ + sources + route
-    from ..layers.recall import _get_cache, _query_hash, CacheEntry, SourceDoc
-
-    cache = _get_cache()
-    qh = _query_hash(resp.answer)  # ใช้ answer เป็น key (ไม่ควรรม truly — ควรใช้ query hash + answer hash)
-
-    entry = CacheEntry(
-        query_hash=qh,
-        answer=resp.answer,
-        sources=[SourceDoc(**s) for s in resp.sources],
-        route=resp.route,
-        ttl_hours=24,
-    )
-    cache.semantic_store(qh, entry)
-    logger.debug("cache: updated semantic entry for %s", qh[:8])
+def write_memory(req: ThinkRequest, resp: ThinkResponse, feedback: str | None = None) -> None:
+    with _memory_lock:
+        _write_memory(req, resp, feedback)
 
 
 # ─── Public API ────────────────────────────────────────────────────────────────
 
 
-async def learn(
-    req: ThinkRequest,
-    answer: str,
-    chunks: list[dict[str, Any]],
-    compliance_flags: list[str],
-) -> None:
-    """Post-process — เขียน memory + อัปเดต cache."""
-
-    # เขียน session (ถ้ามี session_id)
+async def learn(req: ThinkRequest, resp: ThinkResponse) -> None:
+    """Persist the actual response when a caller supplies a session ID."""
     session_id = req.context.get("session_id") if req.context else None
-    if session_id:
-        # สร้าง response ชั่วคราวสำหรับ memory write
-        resp = ThinkResponse(
-            answer=answer,
-            sources=[c.get("source", {}) for c in chunks if c.get("source")],
-            compliance={"passed": len(compliance_flags) == 0, "flags": compliance_flags},
-            grounded=bool(chunks),
-            route="llm",
-            cost=0.0,
-            latency_ms=0,
-            provenance={},
-        )
+    if isinstance(session_id, str) and session_id:
         write_memory(req, resp)
-
-    # อัปเดต cache (ถ้าเป็น LLM response)
-    # ใน pipeline จริง เราจะ pass resp เข้ามา — ที่นี่เราจะอัปเดตจาก answer เฉยๆ
-    # (ชั่วคราวก่อนที่ pipeline จะเปลี่ยน)

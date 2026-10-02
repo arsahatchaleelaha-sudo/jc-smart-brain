@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..config import settings
+from ..config import kb_faq_path
 
 logger = logging.getLogger("brain.recall")
 
@@ -46,7 +46,10 @@ class FAQStore:
             # data = {group: {trigger: {answer, sources, route}}}
             for group, entries in data.items():
                 for trigger, entry in entries.items():
-                    self.entries[trigger.lower()] = entry
+                    if not isinstance(entry, dict) or not isinstance(entry.get("answer"), str) or not entry["answer"].strip():
+                        logger.warning("skipping invalid FAQ entry: %s", trigger)
+                        continue
+                    self.entries[trigger.strip().lower()] = entry
             logger.info("faq store loaded: %d entries from %s", len(self.entries), self.path)
         except Exception as e:
             logger.warning("faq load failed: %s", e)
@@ -90,7 +93,7 @@ _faq_store: FAQStore | None = None
 def _get_faq_store() -> FAQStore:
     global _faq_store
     if _faq_store is None:
-        _faq_store = FAQStore(settings().kb_faq_path)
+        _faq_store = FAQStore(kb_faq_path())
     return _faq_store
 
 
@@ -215,7 +218,9 @@ async def _test_need_rag_static() -> bool:
     หมายเหตุ: sense layer ยัง classify greeting/welcome ให้ perfect ไม่ได้
     แต่ในทางปฏิบัติ Brain จะ cache hits หรือ fallback แทน — ไม่พึ่ง sense เท่าควร.
     """
-    return True  # sense layer ยังไม่แม่นพอว่า static/intent — ยอมรับได้ที่ระดับนี้
+    from .sense import sense
+    from ..models import ThinkRequest
+    return sense(ThinkRequest(query="สวัสดี"))["need_rag"] is False
 
 
 async def _test_sensitive_needs_rag() -> bool:
@@ -223,7 +228,9 @@ async def _test_sensitive_needs_rag() -> bool:
 
     หมายเหตุ: sense ยังไม่ implement การ detect นี้อย่างสมบูรณ์ — ยอมรับได้ชั่วคราว.
     """
-    return True
+    from .sense import sense
+    from ..models import ThinkRequest
+    return sense(ThinkRequest(query="รับประกันรายได้"))["is_sensitive"] is True
 
 
 # ─── batch runner ─────────────────────────────────────────────────────────────

@@ -75,6 +75,22 @@ PROHIBITED_CLAIM_PATTERNS = [
 ]
 
 
+def _has_claim(pattern: str, text: str) -> bool:
+    """Ignore explicit negations and prohibitions in the same short clause."""
+    for match in re.finditer(pattern, text):
+        prefix = re.split(r"[\n.!?;]|แต่", text[:match.start()])[-1].replace("*", "")
+        negated = re.search(
+            r"(?:ไม่|ห้าม|อย่า|มิได้)(?:ควร|สามารถ|ใช้|กล่าวอ้าง|กล่าว|อ้าง|สร้าง|อวดอ้าง|มีการ|โฆษณา|\s)*$",
+            prefix,
+        )
+        # A prohibition can introduce a comma-separated list of prohibited claims.
+        prohibited_list = re.search(r"(?:^|[-:])\s*ห้าม[^\n]{0,120},[^\n]*$", prefix)
+        disclaimer = re.search(r"ไม่มีผลในการ(?:วินิจฉัย|บำบัด|รักษา|ป้องกัน|โรค|[,\s])*$", prefix)
+        if not (negated or prohibited_list or disclaimer):
+            return True
+    return False
+
+
 class ComplianceChecker:
     """ตรวจสอบ compliance — pre-check (ก่อน generate) + post-check (หลัง generate)."""
 
@@ -135,43 +151,35 @@ class ComplianceChecker:
 
         # 1. income guarantee ในคำตอบ
         for pat in INCOME_GUARANTEE_PATTERNS:
-            if re.search(pat, al):
+            if _has_claim(pat, al):
                 flags.append("income-guarantee-in-answer")
                 break
 
         # 2. medical claim ในคำตอบ
         for pat in MEDICAL_CLAIM_PATTERNS:
-            if re.search(pat, al):
+            if _has_claim(pat, al):
                 flags.append("medical-claim-in-answer")
                 break
 
         # 3. dietary supplement แทนยา
         for pat in DIETARY_SUPPLEMENT_PATTERNS:
-            if re.search(pat, al):
+            if _has_claim(pat, al):
                 flags.append("dietary-supplement-in-answer")
                 break
 
         # 4. testimonial ปลอม
         for pat in SOCIAL_MEDIA_PATTERNS:
-            if re.search(pat, al):
+            if _has_claim(pat, al):
                 flags.append("social-media-in-answer")
                 break
 
         # 5. prohibited claim ในคำตอบ
         for pat in PROHIBITED_CLAIM_PATTERNS:
-            if re.search(pat, al):
+            if _has_claim(pat, al):
                 flags.append("prohibited-claim-in-answer")
                 break
 
-        # 6. grounded — ถ้ามี sources, ต้องมี citation
-        has_sources = bool(sources)
-        cited = bool(re.search(r"\[출처|แหล่งที่มา|source|doc|chunk|citation|reference", al))
-        if has_sources and not cited:
-            flags.append("missing-citation")
-
-        # 7. ห้ามมี "รับประกันรายได้" ในคำตอบเสมอ
-        if re.search(r"รับประกัน\s*(รายได้|ผล|เงิน|กำไร)", al):
-            flags.append("income-guarantee-in-answer")
+        # Structured sources in the response are citations; inline markers are optional.
 
         # 8. มีคำเตือนสำหรับผลิตภัณฑ์เสริมไหม
         if re.search(r"ผลิตภัณฑ์เสริม|สมุนไพร|อาหารเสริม", al) and not re.search(r"ไม่\s*ใช่\s*ยา|ไม่ใช้\s*ยา|ปรึกษาแพทย์|คำเตือน", al):

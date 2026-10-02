@@ -6,9 +6,11 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn brain.main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.16
       - key: PYTHONPATH
         value: src
       - key: BRAIN_ENV
         value: production
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeployTrigger: commit

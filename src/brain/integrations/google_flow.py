@@ -22,14 +22,17 @@ import time
 import urllib.request
 import urllib.error
 from typing import Any
+from pathlib import Path
+
+from ..config import settings
 
 logger = logging.getLogger("brain.google_flow")
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 _USEAPI_BASE = "https://api.useapi.net/v1/google-flow"
-_TOKEN = os.environ.get("USEAPI_TOKEN", "")
-_EMAIL = os.environ.get("USEAPI_EMAIL", "")
+_TOKEN = settings().useapi_token
+_EMAIL = settings().useapi_email
 
 _AVAILABLE = bool(_TOKEN)
 if not _AVAILABLE:
@@ -128,6 +131,9 @@ def generate_image_sync(
     if not _AVAILABLE:
         return {"error": "USEAPI_TOKEN not set"}
 
+    if model not in IMAGE_MODELS:
+        return {"error": f"unknown image model: {model}"}
+
     payload: dict[str, Any] = {
         "prompt": prompt,
         "model": model,
@@ -169,6 +175,7 @@ def download_media(url: str, out_path: str) -> bool:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = resp.read()
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "wb") as f:
             f.write(data)
         logger.info("downloaded %s → %s (%d bytes)", url[:80], out_path, len(data))
@@ -216,6 +223,9 @@ def generate_video_sync(
     """
     if not _AVAILABLE:
         return {"error": "USEAPI_TOKEN not set"}
+
+    if model not in VIDEO_MODELS:
+        return {"error": f"unknown video model: {model}"}
 
     payload: dict[str, Any] = {
         "prompt": prompt,
@@ -335,11 +345,14 @@ def generate_and_download_image(
     filename: str = "image.jpg",
     model: str = DEFAULT_IMAGE_MODEL,
     aspect_ratio: str = "16:9",
+    count: int = 1,
+    email: str | None = None,
 ) -> dict[str, Any]:
     """Generate an image and download it to out_dir/filename. Returns result dict."""
-    result = generate_image_sync(prompt, model=model, aspect_ratio=aspect_ratio, count=1)
+    result = generate_image_sync(prompt, model=model, aspect_ratio=aspect_ratio, count=count, email=email)
     if "error" in result:
         return result
+    os.makedirs(out_dir, exist_ok=True)
     urls = extract_image_urls(result)
     if not urls:
         # Try base64 inline
@@ -347,8 +360,11 @@ def generate_and_download_image(
             img = item.get("image", {}).get("generatedImage", {})
             if img.get("encodedImage"):
                 out_path = os.path.join(out_dir, filename)
-                with open(out_path, "wb") as f:
-                    f.write(base64.b64decode(img["encodedImage"]))
+                try:
+                    with open(out_path, "wb") as f:
+                        f.write(base64.b64decode(img["encodedImage"], validate=True))
+                except (ValueError, OSError) as exc:
+                    return {**result, "error": f"inline image write failed: {exc}"}
                 return {**result, "local_path": out_path}
         return {**result, "error": "no image URL in response"}
     out_path = os.path.join(out_dir, filename)
@@ -366,11 +382,13 @@ def generate_and_download_video(
     duration: int = 8,
     start_image: str | None = None,
     end_image: str | None = None,
+    count: int = 1,
+    email: str | None = None,
 ) -> dict[str, Any]:
     """Generate a video (sync mode) and download it to out_dir/filename."""
     result = generate_video_sync(
         prompt, model=model, aspect_ratio=aspect_ratio, duration=duration,
-        start_image=start_image, end_image=end_image, count=1,
+        start_image=start_image, end_image=end_image, count=count, email=email,
     )
     if "error" in result:
         return result
@@ -413,7 +431,7 @@ def ugc_pipeline(
     total_credits = None
 
     for i, scene in enumerate(scenes):
-        name = scene.get("name", f"scene{i+1}")
+        name = Path(scene.get("name") or f"scene{i+1}").name
         prompt = scene["prompt"]
         logger.info("UGC scene %d/%d: %s", i + 1, len(scenes), name)
 
