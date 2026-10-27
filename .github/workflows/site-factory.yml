@@ -1,0 +1,57 @@
+name: Build requested site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site_factory/requests/*.json"
+  workflow_dispatch:
+    inputs:
+      request_file:
+        description: Request JSON path
+        required: true
+        default: site_factory/requests/demo.json
+
+permissions:
+  contents: write
+  models: read
+
+concurrency:
+  group: site-factory-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Select request
+        id: request
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            file="${{ inputs.request_file }}"
+          else
+            file=$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^site_factory/requests/.*\.json$' | tail -1)
+          fi
+          test -n "$file" && test -f "$file"
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+      - name: Generate and validate site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SITE_MODEL: openai/gpt-4.1-mini
+        run: python -m site_factory.generate "${{ steps.request.outputs.file }}"
+      - name: Publish generated files to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site_factory/public
+          git diff --cached --quiet && exit 0
+          git commit -m "Publish generated site [skip ci]"
+          git push
