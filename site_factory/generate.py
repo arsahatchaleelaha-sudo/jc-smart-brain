@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from site_factory.templates.sales_page import render_sales_page
+
 MODEL_URL = "https://models.github.ai/inference/chat/completions"
 DEFAULT_MODEL = "openai/gpt-4.1-mini"
 MAX_PROMPT = 6000
@@ -87,25 +89,36 @@ def _ask_model(prompt: str, title: str, token: str, model: str) -> str:
 def generate(request_file: Path, output_root: Path) -> dict[str, Any]:
     request = json.loads(request_file.read_text(encoding="utf-8"))
     job_id = safe_job_id(str(request.get("job_id") or request_file.stem))
+    mode = str(request.get("mode") or "generic").strip().lower()
     prompt = str(request.get("prompt") or "").strip()[:MAX_PROMPT]
-    if not prompt:
-        raise ValueError("prompt is required")
     title = str(request.get("title") or "เว็บไซต์ของคุณ").strip()[:120]
-    page = ""
-    provider = "safe-template"
-    error = None
-    token = os.getenv("GITHUB_TOKEN", "").strip()
-    if token:
-        try:
-            page = _ask_model(prompt, title, token, os.getenv("SITE_MODEL", DEFAULT_MODEL))
-            validate_site(page)
-            provider = "github-models"
-        except (KeyError, ValueError, TimeoutError, urllib.error.URLError) as exc:
-            error = type(exc).__name__
-            page = ""
-    if not page:
-        page = _fallback_html(prompt, title)
+    if mode == "sales_page":
+        spec = request.get("spec")
+        if not isinstance(spec, dict):
+            raise ValueError("sales_page spec is required")
+        page = render_sales_page(spec, title=title)
         validate_site(page)
+        provider = "jwiz-premium-template"
+        error = None
+    else:
+        if not prompt:
+            raise ValueError("prompt is required")
+        page = ""
+        provider = "safe-template"
+        error = None
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if mode != "sales_page":
+        if token:
+            try:
+                page = _ask_model(prompt, title, token, os.getenv("SITE_MODEL", DEFAULT_MODEL))
+                validate_site(page)
+                provider = "github-models"
+            except (KeyError, ValueError, TimeoutError, urllib.error.URLError) as exc:
+                error = type(exc).__name__
+                page = ""
+        if not page:
+            page = _fallback_html(prompt, title)
+            validate_site(page)
 
     target = output_root / "sites" / job_id
     target.mkdir(parents=True, exist_ok=True)
@@ -118,6 +131,7 @@ def generate(request_file: Path, output_root: Path) -> dict[str, Any]:
         "status": "ready",
         "url": f"{base_url}/{job_id}/",
         "provider": provider,
+        "mode": mode,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
     if error:
