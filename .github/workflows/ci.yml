@@ -26,4 +26,6 @@ jobs:
       - name: Compile
         run: python -m compileall -q site_factory src
       - name: Test site factory
+        env:
+          PYTHONPATH: .
         run: pytest -q tests/test_site_factory.py
