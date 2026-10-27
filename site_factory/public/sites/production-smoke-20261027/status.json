@@ -1,0 +1,8 @@
+{
+  "job_id": "production-smoke-20261027",
+  "status": "ready",
+  "url": "https://arsahatchaleelaha-sudo.github.io/jc-smart-brain/sites/production-smoke-20261027/",
+  "provider": "safe-template",
+  "generated_at": "2026-10-27T02:11:18.968304+00:00",
+  "model_fallback": "JSONDecodeError"
+}
