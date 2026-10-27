@@ -7,6 +7,9 @@ on:
     paths:
       - "site_factory/public/**"
       - ".github/workflows/pages.yml"
+  workflow_run:
+    workflows: ["Build requested site"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -20,6 +23,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
