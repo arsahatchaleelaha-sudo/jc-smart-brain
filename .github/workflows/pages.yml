@@ -1,4 +1,5 @@
 name: Deploy site factory to GitHub Pages
+# Production publishing is enabled in repository settings.
 
 on:
   push:
