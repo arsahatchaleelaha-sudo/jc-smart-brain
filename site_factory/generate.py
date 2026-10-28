@@ -164,8 +164,28 @@ def _ask_single_api(prompt: str, title: str, token: str, model: str, api_url: st
         headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})},
     )
     with urllib.request.urlopen(request, timeout=90) as response:
-        data = json.load(response)
-    return _extract_html(data["choices"][0]["message"]["content"])
+        raw = response.read().decode("utf-8", errors="replace")
+
+    # OpenAI-compatible endpoints normally return JSON, but free providers may
+    # return the generated HTML as text/plain even on /v1/chat/completions.
+    # Accept both shapes so a valid page does not fall through to the generic
+    # template merely because the upstream Content-Type/body shape drifted.
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        page = _extract_html(raw)
+        if page:
+            return page
+        raise
+
+    content = data["choices"][0]["message"]["content"]
+    if isinstance(content, list):
+        content = "".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict)
+        )
+    return _extract_html(str(content))
 
 
 def _ask_model(prompt: str, title: str, token: str, model: str) -> tuple[str, str, str | None]:
