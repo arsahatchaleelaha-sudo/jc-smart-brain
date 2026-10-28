@@ -5,6 +5,7 @@ import html
 import json
 import os
 import re
+import sys
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -67,10 +68,11 @@ MODEL_URL = _resolve_model_url()
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 MAX_PROMPT = 6000
 
-# Pollinations.ai Classic API — free, anonymous (1 req/30s per IP, no key needed).
-# Provides GPT-OSS 20B (alias "openai") as a fallback when GitHub Models API
-# or OpenRouter is unavailable (e.g., account not enabled, no API key).
-POLLINATIONS_URL = "https://text.pollinations.ai/openai/chat/completions"
+# Pollinations.ai Classic API — free, anonymous (no key needed).
+# Uses /v1/chat/completions (OpenAI-compatible). Model "openai" is an alias
+# for GPT-OSS 20B. Falls back when GitHub Models API or OpenRouter is
+# unavailable (account not enabled, no API key).
+POLLINATIONS_URL = "https://text.pollinations.ai/v1/chat/completions"
 POLLINATIONS_MODEL = "openai"
 
 
@@ -100,10 +102,28 @@ footer{{margin-top:60px;color:#657085;font-size:.9rem}}
 
 
 def _extract_html(text: str) -> str:
+    """Extract a complete HTML document from model output.
+
+    Handles truncated responses (model stops before ``</html>``) by
+    appending the closing tag when needed.
+    """
+    # Try to find a complete HTML document
     match = re.search(r"<!doctype html.*?</html>", text, flags=re.I | re.S)
     if not match:
         match = re.search(r"<html.*?</html>", text, flags=re.I | re.S)
-    return match.group(0).strip() if match else ""
+    if match:
+        return match.group(0).strip()
+
+    # Fallback: extract from <!doctype html> or <html> to end, then
+    # ensure proper closure for truncated model responses.
+    match = re.search(r"(?:<!doctype html|<html\b[^>]*>).*", text, flags=re.I | re.S)
+    if match:
+        content = match.group(0).strip()
+        if not re.search(r"</html>\s*$", content, re.I):
+            content += "\n</html>"
+        return content
+
+    return ""
 
 
 def validate_site(page: str) -> None:
@@ -136,7 +156,7 @@ def _ask_single_api(prompt: str, title: str, token: str, model: str, api_url: st
         api_url,
         data=payload,
         method="POST",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})},
     )
     with urllib.request.urlopen(request, timeout=90) as response:
         data = json.load(response)
@@ -174,12 +194,13 @@ def _ask_model(prompt: str, title: str, token: str, model: str) -> tuple[str, st
             if page:
                 return page, "pollinations", primary_error
         except urllib.error.HTTPError as exc:
+            print(f"DEBUG: Pollinations.ai fallback HTTPError {exc.code}", file=sys.stderr)
             if exc.code == 503 and attempt == 0:
                 import time
                 time.sleep(11)
                 continue
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"DEBUG: Pollinations.ai fallback {exc.__class__.__name__}: {exc}", file=sys.stderr)
         break
 
     return "", "safe-template", primary_error
