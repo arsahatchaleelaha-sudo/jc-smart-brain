@@ -1,8 +1,9 @@
 import json
+import urllib.request
 
 import pytest
 
-from site_factory.generate import generate, safe_job_id, validate_site
+from site_factory.generate import _ask_single_api, generate, safe_job_id, validate_site
 
 
 def test_safe_job_id():
@@ -14,6 +15,33 @@ def test_safe_job_id():
 def test_rejects_active_content():
     with pytest.raises(ValueError):
         validate_site('<html><meta name="viewport"><script>alert(1)</script></html>')
+
+
+def test_accepts_plain_html_model_response(monkeypatch):
+    page = """<!doctype html><html lang="th"><head>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body { color: #123; }</style></head><body>
+    <h1>Production QC</h1><p>เว็บไซต์พร้อมใช้งาน</p>
+    </body></html>"""
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self):
+            return page.encode("utf-8")
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda request, timeout=90: FakeResponse(),
+    )
+    result = _ask_single_api("สร้างเว็บ", "Production QC", "", "openai", "https://example.test")
+    assert "Production QC" in result
+    assert result.lower().startswith("<!doctype html")
 
 
 def test_generates_safe_fallback(tmp_path, monkeypatch):
