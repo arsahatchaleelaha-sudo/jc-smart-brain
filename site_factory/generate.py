@@ -128,7 +128,7 @@ def _extract_html(text: str) -> str:
 
 def validate_site(page: str) -> None:
     lower = page.lower()
-    required = ("<html", "</html>", "<meta name=\"viewport\"", "<body", "</style>")
+    required = ("<html", "</html>", "<meta name=\"viewport\"", "<body", "</style>", "</body>")
     if not all(item in lower for item in required):
         raise ValueError("generated page is incomplete")
     blocked = ("<script", "javascript:", "document.cookie", "localstorage", "eval(")
