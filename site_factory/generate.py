@@ -128,12 +128,14 @@ def _extract_html(text: str) -> str:
 
 def validate_site(page: str) -> None:
     lower = page.lower()
-    required = ("<html", "</html>", "<meta name=\"viewport\"")
+    required = ("<html", "</html>", "<meta name=\"viewport\"", "<body", "</style>")
     if not all(item in lower for item in required):
         raise ValueError("generated page is incomplete")
     blocked = ("<script", "javascript:", "document.cookie", "localstorage", "eval(")
     if any(item in lower for item in blocked):
         raise ValueError("generated page contains blocked active content")
+    if len(page.encode("utf-8")) < 1000:
+        raise ValueError("generated page is too small")
     if len(page.encode("utf-8")) > 750_000:
         raise ValueError("generated page is too large")
 
@@ -184,6 +186,7 @@ def _ask_model(prompt: str, title: str, token: str, model: str) -> tuple[str, st
         try:
             page = _ask_single_api(prompt, title, token, model, MODEL_URL)
             if page:
+                validate_site(page)
                 return page, "github-models", None
             primary_error = "empty-response"
         except Exception as exc:
@@ -195,7 +198,10 @@ def _ask_model(prompt: str, title: str, token: str, model: str) -> tuple[str, st
         try:
             page = _ask_single_api(prompt, title, "", POLLINATIONS_MODEL, POLLINATIONS_URL)
             if page:
+                validate_site(page)
                 return page, "pollinations", primary_error
+        except ValueError as exc:
+            print(f"DEBUG: Pollinations.ai validation failed: {exc}", file=sys.stderr)
         except urllib.error.HTTPError as exc:
             print(f"DEBUG: Pollinations.ai fallback HTTPError {exc.code}", file=sys.stderr)
             if exc.code == 503 and attempt == 0:
