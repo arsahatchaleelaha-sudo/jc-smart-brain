@@ -1,0 +1,9 @@
+{
+  "job_id": "qc-model-response-20261028",
+  "status": "ready",
+  "url": "https://arsahatchaleelaha-sudo.github.io/jc-smart-brain/sites/qc-model-response-20261028/",
+  "provider": "safe-template",
+  "mode": "generic",
+  "generated_at": "2026-10-28T11:20:31.394138+00:00",
+  "model_fallback": "JSONDecodeError"
+}
