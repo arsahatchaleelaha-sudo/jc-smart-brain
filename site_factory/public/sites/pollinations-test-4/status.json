@@ -1,0 +1,9 @@
+{
+  "job_id": "pollinations-test-4",
+  "status": "ready",
+  "url": "https://arsahatchaleelaha-sudo.github.io/jc-smart-brain/sites/pollinations-test-4/",
+  "provider": "safe-template",
+  "mode": "generic",
+  "generated_at": "2026-10-28T08:10:16.090693+00:00",
+  "model_fallback": "JSONDecodeError"
+}
