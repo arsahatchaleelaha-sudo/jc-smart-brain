@@ -3,7 +3,13 @@ import urllib.request
 
 import pytest
 
-from site_factory.generate import _ask_single_api, generate, safe_job_id, validate_site
+from site_factory.generate import (
+    _ask_single_api,
+    _resolve_model_name,
+    generate,
+    safe_job_id,
+    validate_site,
+)
 
 
 def test_safe_job_id():
@@ -15,6 +21,12 @@ def test_safe_job_id():
 def test_rejects_active_content():
     with pytest.raises(ValueError):
         validate_site('<html><meta name="viewport"><script>alert(1)</script></html>')
+
+
+def test_resolves_site_model_workflow_variable(monkeypatch):
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    monkeypatch.setenv("SITE_MODEL", "openai/gpt-4.1-mini")
+    assert _resolve_model_name() == "openai/gpt-4.1-mini"
 
 
 def test_accepts_plain_html_model_response(monkeypatch):
