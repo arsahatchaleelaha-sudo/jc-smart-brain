@@ -14,7 +14,7 @@ from typing import Any
 from site_factory.templates.sales_page import render_sales_page
 
 MODEL_URL = "https://models.github.ai/inference/chat/completions"
-DEFAULT_MODEL = "openai/gpt-4.1-mini"
+DEFAULT_MODEL = "openai/gpt-4o-mini"
 MAX_PROMPT = 6000
 
 
