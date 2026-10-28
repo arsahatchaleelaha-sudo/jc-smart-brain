@@ -13,7 +13,14 @@ from typing import Any
 
 from site_factory.templates.sales_page import render_sales_page
 
-MODEL_URL = "https://models.github.ai/inference/chat/completions"
+# Configurable model endpoint — defaults to GitHub Models but can be
+# overridden via MODEL_URL or OPENAI_BASE_URL (e.g. for OpenRouter:
+#   MODEL_URL=https://openrouter.ai/api/v1/chat/completions
+#   OPENAI_API_KEY=<key>)
+MODEL_URL = os.environ.get(
+    "MODEL_URL",
+    os.environ.get("OPENAI_BASE_URL", "https://models.github.ai/inference/chat/completions"),
+)
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 MAX_PROMPT = 6000
 
@@ -106,7 +113,9 @@ def generate(request_file: Path, output_root: Path) -> dict[str, Any]:
         page = ""
         provider = "safe-template"
         error = None
-    token = os.getenv("GITHUB_TOKEN", "").strip()
+    # Prefer OPENAI_API_KEY (e.g. OpenRouter) over GITHUB_TOKEN so
+    # the same env var name works across local and CI environments.
+    token = os.getenv("OPENAI_API_KEY") or os.getenv("GITHUB_TOKEN", "").strip()
     if mode != "sales_page":
         if token:
             try:
