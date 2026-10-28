@@ -141,10 +141,13 @@ def validate_site(page: str) -> None:
 def _ask_single_api(prompt: str, title: str, token: str, model: str, api_url: str) -> str:
     """Single API call to a model endpoint. Returns HTML string or raises on error."""
     instructions = (
-        "Create one polished, mobile-first Thai/English static website as a single index.html. "
-        "Return HTML only. Include all CSS inline. Do not use JavaScript, forms, trackers, embeds, "
-        "remote images, remote fonts, or external assets. Be accurate and never invent contact details. "
-        f"Site title: {title}\nUser request: {prompt}"
+        "Create a mobile-first static website as a single HTML file. "
+        "Write content in BOTH Thai (ภาษาไทย) AND English. "
+        "Include Thai headings, product descriptions, and footer text. "
+        "All CSS must be inline in a <style> tag. "
+        "Do not use JavaScript, forms, trackers, embeds, remote images, or external fonts. "
+        "Be accurate — never invent contact details or phone numbers. "
+        f"Website title: {title}\nUser request: {prompt}"
     )
     payload = json.dumps({
         "model": model,
