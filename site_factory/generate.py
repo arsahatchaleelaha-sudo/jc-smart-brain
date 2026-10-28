@@ -65,8 +65,17 @@ def _resolve_model_url() -> str:
 #   MODEL_URL=https://openrouter.ai/api/v1/chat/completions
 #   OPENAI_API_KEY=<key>)
 MODEL_URL = _resolve_model_url()
-DEFAULT_MODEL = "openai/gpt-4o-mini"
+DEFAULT_MODEL = "openai/gpt-4.1-mini"
 MAX_PROMPT = 6000
+
+
+def _resolve_model_name() -> str:
+    """Use the workflow variable name while preserving local compatibility."""
+    return (
+        os.environ.get("MODEL_NAME")
+        or os.environ.get("SITE_MODEL")
+        or DEFAULT_MODEL
+    ).strip()
 
 # Pollinations.ai Classic API — free, anonymous (no key needed).
 # Uses /v1/chat/completions (OpenAI-compatible). Model "openai" is an alias
@@ -261,7 +270,7 @@ def generate(request_file: Path, output_root: Path) -> dict[str, Any]:
     if mode != "sales_page":
         try:
             page, provider, model_fallback = _ask_model(
-                prompt, title, token, os.getenv("MODEL_NAME", DEFAULT_MODEL)
+                prompt, title, token, _resolve_model_name()
             )
             if model_fallback:
                 error = model_fallback
