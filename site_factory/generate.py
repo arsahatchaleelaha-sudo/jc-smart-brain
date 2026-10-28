@@ -13,14 +13,57 @@ from typing import Any
 
 from site_factory.templates.sales_page import render_sales_page
 
+
+def _get_github_var(name: str) -> str:
+    """Fetch a GitHub Actions repository variable via the REST API.
+
+    GitHub Actions repository variables are NOT automatically exposed as
+    environment variables (unlike ``env:`` entries).  They must be read
+    through the ``vars`` context or fetched via the API.  This helper lets
+    ``generate.py`` work both locally (env vars) and in CI (GitHub var).
+    """
+    token = os.environ.get("GITHUB_TOKEN", "")
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+    if not token or not repo:
+        return ""
+    try:
+        req = urllib.request.Request(
+            f"{api_url}/repos/{repo}/actions/variables/{name}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("value", "")
+    except Exception:
+        return ""
+
+
+def _resolve_model_url() -> str:
+    """Resolve the model endpoint URL.
+
+    Precedence: env var → GitHub Actions variable → GitHub Models default.
+    """
+    val = os.environ.get("MODEL_URL")
+    if val:
+        return val
+    val = os.environ.get("OPENAI_BASE_URL")
+    if val:
+        return val
+    val = _get_github_var("OPENAI_BASE_URL")
+    if val:
+        return val
+    return "https://models.github.ai/inference/chat/completions"
+
+
 # Configurable model endpoint — defaults to GitHub Models but can be
 # overridden via MODEL_URL or OPENAI_BASE_URL (e.g. for OpenRouter:
 #   MODEL_URL=https://openrouter.ai/api/v1/chat/completions
 #   OPENAI_API_KEY=<key>)
-MODEL_URL = os.environ.get(
-    "MODEL_URL",
-    os.environ.get("OPENAI_BASE_URL", "https://models.github.ai/inference/chat/completions"),
-)
+MODEL_URL = _resolve_model_url()
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 MAX_PROMPT = 6000
 
