@@ -110,7 +110,7 @@ def generate(request_file: Path, output_root: Path) -> dict[str, Any]:
     if mode != "sales_page":
         if token:
             try:
-                page = _ask_model(prompt, title, token, os.getenv("SITE_MODEL", DEFAULT_MODEL))
+                page = _ask_model(prompt, title, token, os.getenv("MODEL_NAME", DEFAULT_MODEL))
                 validate_site(page)
                 provider = "github-models"
             except (KeyError, ValueError, TimeoutError, urllib.error.URLError) as exc:
