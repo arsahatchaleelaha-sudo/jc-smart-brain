@@ -1,0 +1,9 @@
+{
+  "job_id": "qc-model-name-20261028",
+  "status": "ready",
+  "url": "https://arsahatchaleelaha-sudo.github.io/jc-smart-brain/sites/qc-model-name-20261028/",
+  "provider": "pollinations",
+  "mode": "generic",
+  "generated_at": "2026-10-28T11:23:17.708033+00:00",
+  "model_fallback": "JSONDecodeError"
+}
