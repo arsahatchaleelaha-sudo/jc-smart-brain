@@ -124,7 +124,7 @@ def generate(request_file: Path, output_root: Path) -> dict[str, Any]:
     target.mkdir(parents=True, exist_ok=True)
     (target / "index.html").write_text(page, encoding="utf-8")
     base_url = os.getenv(
-        "SITE_BASE_URL", "https://arsahatchaleelaha-sudo.github.io/jc-smart-brain/sites"
+        "SITE_BASE_URL", "https://arsahatchaleelaha-sudo.github.io/jc-smart-brain/site_factory/public/sites"
     ).rstrip("/")
     status = {
         "job_id": job_id,
