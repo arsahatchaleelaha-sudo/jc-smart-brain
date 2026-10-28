@@ -67,6 +67,12 @@ MODEL_URL = _resolve_model_url()
 DEFAULT_MODEL = "openai/gpt-4o-mini"
 MAX_PROMPT = 6000
 
+# Pollinations.ai Classic API — free, anonymous (1 req/30s per IP, no key needed).
+# Provides GPT-OSS 20B (alias "openai") as a fallback when GitHub Models API
+# or OpenRouter is unavailable (e.g., account not enabled, no API key).
+POLLINATIONS_URL = "https://text.pollinations.ai/openai/chat/completions"
+POLLINATIONS_MODEL = "openai"
+
 
 def safe_job_id(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "-", value).strip("-").lower()
@@ -112,7 +118,8 @@ def validate_site(page: str) -> None:
         raise ValueError("generated page is too large")
 
 
-def _ask_model(prompt: str, title: str, token: str, model: str) -> str:
+def _ask_single_api(prompt: str, title: str, token: str, model: str, api_url: str) -> str:
+    """Single API call to a model endpoint. Returns HTML string or raises on error."""
     instructions = (
         "Create one polished, mobile-first Thai/English static website as a single index.html. "
         "Return HTML only. Include all CSS inline. Do not use JavaScript, forms, trackers, embeds, "
@@ -126,7 +133,7 @@ def _ask_model(prompt: str, title: str, token: str, model: str) -> str:
         "max_tokens": 5000,
     }).encode()
     request = urllib.request.Request(
-        MODEL_URL,
+        api_url,
         data=payload,
         method="POST",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
@@ -134,6 +141,48 @@ def _ask_model(prompt: str, title: str, token: str, model: str) -> str:
     with urllib.request.urlopen(request, timeout=90) as response:
         data = json.load(response)
     return _extract_html(data["choices"][0]["message"]["content"])
+
+
+def _ask_model(prompt: str, title: str, token: str, model: str) -> tuple[str, str, str | None]:
+    """Try primary model API (GitHub Models / OpenRouter), then Pollinations.ai free fallback.
+
+    Returns (page_html, provider_name, model_fallback_error_or_None).
+    - If primary succeeds:                       (page, "github-models", None)
+    - If primary fails but Pollinations works:   (page, "pollinations", "<PrimaryError>")
+    - If both fail:                              ("", "safe-template", "<PrimaryError>")
+    """
+    primary_error: str | None = None
+
+    # Try primary API (GitHub Models API or OpenRouter via MODEL_URL)
+    # Skip if MODEL_URL points to Pollinations.ai — that would exhaust the
+    # 30s free rate-limit on the wrong model before the fallback tries the
+    # correct model alias.
+    if token and not MODEL_URL.startswith("https://text.pollinations.ai"):
+        try:
+            page = _ask_single_api(prompt, title, token, model, MODEL_URL)
+            if page:
+                return page, "github-models", None
+            primary_error = "empty-response"
+        except Exception as exc:
+            primary_error = exc.__class__.__name__
+
+    # Try Pollinations.ai Classic API — free, no key needed, 1 req/30s per IP
+    # Server can be overloaded (503); retry once after the suggested delay.
+    for attempt in range(2):
+        try:
+            page = _ask_single_api(prompt, title, "", POLLINATIONS_MODEL, POLLINATIONS_URL)
+            if page:
+                return page, "pollinations", primary_error
+        except urllib.error.HTTPError as exc:
+            if exc.code == 503 and attempt == 0:
+                import time
+                time.sleep(11)
+                continue
+        except Exception:
+            pass
+        break
+
+    return "", "safe-template", primary_error
 
 
 def generate(request_file: Path, output_root: Path) -> dict[str, Any]:
@@ -160,16 +209,20 @@ def generate(request_file: Path, output_root: Path) -> dict[str, Any]:
     # the same env var name works across local and CI environments.
     token = os.getenv("OPENAI_API_KEY") or os.getenv("GITHUB_TOKEN", "").strip()
     if mode != "sales_page":
-        if token:
-            try:
-                page = _ask_model(prompt, title, token, os.getenv("MODEL_NAME", DEFAULT_MODEL))
+        try:
+            page, provider, model_fallback = _ask_model(
+                prompt, title, token, os.getenv("MODEL_NAME", DEFAULT_MODEL)
+            )
+            if model_fallback:
+                error = model_fallback
+            if page:
                 validate_site(page)
-                provider = "github-models"
-            except (KeyError, ValueError, TimeoutError, urllib.error.URLError) as exc:
-                error = type(exc).__name__
-                page = ""
+        except (KeyError, ValueError, TimeoutError, urllib.error.URLError) as exc:
+            error = type(exc).__name__
+            page = ""
         if not page:
             page = _fallback_html(prompt, title)
+            provider = "safe-template"
             validate_site(page)
 
     target = output_root / "sites" / job_id
